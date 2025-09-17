@@ -4,8 +4,20 @@ import regex as re
 from collections import Counter, defaultdict # 引入 defaultdict
 import pickle
 from typing import BinaryIO
+import time
+import psutil
 
-# --- 以下函数保持不变 ---
+
+process = psutil.Process(os.getpid())
+
+def log_memory_usage(step: str):
+    """记录当前内存使用情况"""
+    mem_info = process.memory_info()
+    # 转换为MB
+    rss = mem_info.rss / (1024 * 1024)  # 常驻内存
+    vms = mem_info.vms / (1024 * 1024)  # 虚拟内存
+    print(f"[{step}] 内存使用 - 常驻内存: {rss:.2f} MB, 虚拟内存: {vms:.2f} MB")
+    return rss
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -118,11 +130,8 @@ def train_bpe(
     token_counts = Counter()
     for count_dict in results:
         token_counts.update(count_dict)
-    
-    # 3. --- 新增优化步骤: 构建初始字节对频率和反向索引 ---
     print("Building initial stats and inverted index...")
     pair_counts = Counter()
-    # 这是核心优化数据结构: { (pair_byte1, pair_byte2): set(token1, token2, ...), ... }
     pair_to_tokens_map = defaultdict(set)
     for token, count in token_counts.items():
         for i in range(len(token) - 1):
@@ -132,6 +141,7 @@ def train_bpe(
 
     # 4. BPE算法主循环 (已使用反向索引优化)
     print("Starting BPE merges...")
+    
     while len(vocab) < vocab_size:
         # 4.1 找到频率最高的字节对 (逻辑不变)
         most_common_pair, _ = find_most_common_pair(pair_counts, vocab)
@@ -200,20 +210,65 @@ def train_bpe(
         
         next_token_id += 1
         
-            
+    
     return vocab, merges
 
 # --- 保存和加载模型的函数 (保持不变) ---
 def save_bpe_model_binary(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], output_path: str):
     """将BPE模型保存为二进制格式"""
-    with open(output_path, "wb") as f:
-        pickle.dump({
-            "vocab": vocab,
-            "merges": merges
-        }, f, protocol=pickle.HIGHEST_PROTOCOL)
+    with open(output_path + 'vocab.pkl', "wb") as f:
+        pickle.dump(vocab, f, protocol=pickle.HIGHEST_PROTOCOL)
+    with open(output_path + 'merges.pkl', "wb") as f:
+        pickle.dump(merges, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 def load_bpe_model_binary(input_path: str) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """从二进制文件加载BPE模型"""
     with open(input_path, "rb") as f:
         data = pickle.load(f)
     return data["vocab"], data["merges"]
+def find_longest_vocab_key(vocab: dict):
+    """查找vocab中最长的key（tuple类型），并打印其信息"""
+    if not vocab:
+        print("词汇表为空")
+        return
+    
+    # 找到最长的key及其长度
+    longest_length = 0
+    longest_key = None
+    longest_value = None
+    
+    for key, value in vocab.items():
+        # 对于整数key，长度视为1；对于元组key，使用其元素数量
+        current_length = len(value)
+        
+        if current_length > longest_length:
+            longest_length = current_length
+            longest_key = key
+            longest_value = value
+    
+    print(f"\n最长的vocab key信息:")
+    print(f"key: {longest_key}")
+    print(f"key长度（元素数量）: {longest_length}")
+    print(f"对应的value（字节）: {longest_value}")
+    try:
+        # 尝试解码为字符串（可能包含无法解码的字节）
+        print(f"value解码为字符串: {longest_value.decode('utf-8', errors='replace')}")
+    except UnicodeDecodeError:
+        print("value无法解码为UTF-8字符串")
+
+def main():
+    start_time = time.time()
+    log_memory_usage("主程序开始")
+    vocab, merges = train_bpe('../data/corpus.en', 10000, ['<|endoftext|>'])
+    log_memory_usage("训练完成")
+    # print(vocab)
+    # print(merges)
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(elapsed_time)
+    save_bpe_model_binary(vocab, merges, './')
+    find_longest_vocab_key(vocab)
+    
+
+if __name__ == '__main__':
+    main()
