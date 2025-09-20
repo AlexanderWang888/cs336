@@ -2,15 +2,9 @@ import os
 from typing import Iterable, Iterator, List, Dict, Tuple, Optional, Any
 import pickle
 import regex as re
-import pytest
 
 import json
 import os
-import resource
-import sys
-
-import psutil
-import pytest
 
 
 FIXTURES_PATH = "../tests/fixtures"

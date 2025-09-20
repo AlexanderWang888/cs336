@@ -4,9 +4,11 @@ from utils import *
 from bpe import *
 from tokenizer import *
 import glob
+import torch
 
 def train():
     # 1. Hyperparameters and configurations are grouped together
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     config = {
         'd_model': 32,
         'num_layers': 2,
@@ -18,9 +20,11 @@ def train():
         'dataset_path': '../data/tiny.txt',
         'batch_size': 2,
         'context_length': 20,
-        'device': 'cuda',
-        'vocab_path': './vocab.pkl',
-        'merges_path': './merges.pkl',
+        'device': device,
+        'vocab_path': './tokenizer_files/vocab.pkl',
+        'merges_path': './tokenizer_files/merges.pkl',
+        
+        'tokenized_file_path': './tokenizer_files/tokenized_data.bin'
     }
     
     # 2. Function calls use unpacked dictionary for cleaner code
@@ -41,6 +45,7 @@ def train_model(config):
     device = config['device']
     vocab_path = config['vocab_path']
     merges_path = config['merges_path']
+    tokenized_file_path = config['tokenized_file_path']
 
     # 3. Data loading section
     with open(vocab_path, "rb") as f:
@@ -48,7 +53,7 @@ def train_model(config):
     with open(merges_path, "rb") as f:
         merges = pickle.load(f)
     tokenizer = Tokenizer(vocab, merges, ["<|endoftext|>"])
-    tokenized_file_path = "tokenized_data.bin"
+    
 
     try:
         with open(tokenized_file_path, "rb") as f:
@@ -129,9 +134,9 @@ def train_model(config):
         print(f"Epoch {epoch} finished. Average Validation Loss: {avg_val_loss:.4f}")
         print(f"--------------------------------------------------")
         
-        save_checkpoint(model, opt, epoch, f"checkpoint_epoch{epoch}.pt")
+        save_checkpoint(model, opt, epoch, f"./checkpoints/checkpoint_epoch{epoch}.pt")
 
-def find_latest_checkpoint(checkpoint_dir='.'):
+def find_latest_checkpoint(checkpoint_dir='./checkpoints'):
     """
     在指定目录下找到最新的检查点文件。
     
@@ -164,8 +169,8 @@ def test(prompt="hello", max_output_token_num=10):
         'batch_size': 2,
         'context_length': 20,
         'device': 'cpu',
-        'vocab_path': './vocab.pkl',
-        'merges_path': './merges.pkl',
+        'vocab_path': './tokenizer_files/vocab.pkl',
+        'merges_path': './tokenizer_files/merges.pkl',
     }
     
     # 2. Function calls use unpacked dictionary for cleaner code
