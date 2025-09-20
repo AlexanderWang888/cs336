@@ -2,27 +2,40 @@ import os
 from typing import Iterable, Iterator, List, Dict, Tuple, Optional, Any
 import pickle
 import regex as re
+import pytest
 
+import json
+import os
+import resource
+import sys
+
+import psutil
+import pytest
+
+
+FIXTURES_PATH = "../tests/fixtures"
+VOCAB_PATH = FIXTURES_PATH + "/gpt2_vocab.json"
+MERGES_PATH = FIXTURES_PATH + "/gpt2_merges.txt"
 
 class Tokenizer:
-    def __init__(self, vocab: Dict[int, bytes], merges: List[Tuple[bytes, bytes]], 
+    def __init__(self, vocab: Dict[int, bytes], merges: List[Tuple[bytes, bytes]],
                  special_tokens: Optional[List[str]] = None):
         self.vocab = vocab
-        self.merges = merges 
+        self.merges = merges
         if special_tokens:
             self.special_tokens = sorted(special_tokens, key=len, reverse=True)
         else:
             self.special_tokens = None
         self.reverse_vocab = {v: k for k, v in vocab.items()}
-    
-    @classmethod 
+
+    @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
         with open(vocab_filepath, "rb") as f:
             vocab = pickle.load(f)
         with open(merges_filepath, "rb") as f:
             merges = pickle.load(f)
         return cls(vocab, merges, special_tokens)
-    
+
     def encode(self, text: str) -> list[int]:
         if self.special_tokens:
             pattern = "|".join(re.escape(tok) for tok in self.special_tokens)
@@ -34,9 +47,16 @@ class Tokenizer:
         PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
         token_ids = []
         for segment in segments:
-            if segment in self.special_tokens:
-                token_id = self.reverse_vocab.get(segment.encode('utf-8'))
-                # if token_id is not None:
+            if self.special_tokens and segment in self.special_tokens:
+                # 检查特殊令牌是否在反向词汇表中
+                encoded_segment = segment.encode('utf-8')
+                token_id = self.reverse_vocab.get(encoded_segment)
+                if token_id is None:
+                    # 如果不存在，动态添加到词汇表
+                    next_id = max(self.vocab.keys()) + 1
+                    self.vocab[next_id] = encoded_segment
+                    self.reverse_vocab[encoded_segment] = next_id
+                    token_id = next_id
                 token_ids.append(token_id)
             else:
                 # 1. 使用正则表达式对普通文本块进行初步切分
@@ -58,8 +78,8 @@ class Tokenizer:
                         new_parts = []
                         while i < len(parts):
                             # 检查当前位置和下一个位置的字节是否匹配合并规则
-                            if (i < len(parts) - 1 and 
-                                    parts[i] == merge_pair[0] and 
+                            if (i < len(parts) - 1 and
+                                    parts[i] == merge_pair[0] and
                                     parts[i+1] == merge_pair[1]):
                                 # 如果匹配，则合并，并将合并后的结果添加到新列表
                                 new_parts.append(merge_pair[0] + merge_pair[1])
@@ -78,8 +98,8 @@ class Tokenizer:
                         if token_id is not None:
                             token_ids.append(token_id)
 
-        return token_ids 
-    
+        return token_ids
+
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for text_chunk in iterable:
             # 对每一个文本块调用encode方法，得到一个token ID列表
@@ -93,7 +113,34 @@ class Tokenizer:
             text_byte += byte
         return text_byte.decode('utf-8', errors='replace')
 
+
+def test_encode_iterable():
+    with open('./vocab.pkl', "rb") as f:
+        vocab = pickle.load(f)
+    tokenizer = Tokenizer.from_files('./vocab.pkl', './merges.pkl')
+
+    # 一个较长的测试文本
+    long_text = "Hello, world! This is a long piece of text to test the iterable encoding. It should be processed chunk by chunk without losing information."
     
+    # 将文本分成几个块来模拟可迭代对象
+    text_chunks = [
+        "Hello, world! This is a long ",
+        "piece of text to test the iterable encoding. ",
+        "It should be processed chunk by chunk without losing information."
+    ]
+
+    # 使用encode_iterable进行编码
+    encoded_ids_iterable = list(tokenizer.encode_iterable(text_chunks))
+    
+    # 直接对完整文本进行编码，作为基准
+    encoded_ids_full = tokenizer.encode(long_text)
+    
+    # 验证两种方式的结果是否一致
+    assert encoded_ids_iterable == encoded_ids_full
+    assert tokenizer.decode(encoded_ids_iterable) == long_text
+    
+    print("test_encode_iterable 成功通过！")
+
 
 def main():
     # 测试特殊令牌
@@ -106,7 +153,7 @@ def main():
     # 测试文本
     test_texts = [
         "Hello, how <|endoftext|><|endoftext|> are you?<|endoftext|>"
-    ] 
+    ]
 
     ids = tokenizer.encode(test_texts[0])
     tokenized_string = [tokenizer.decode([x]) for x in ids]
@@ -131,5 +178,7 @@ def main():
     #         print(f"编码过程出错: {str(e)}")
     #     print("-" * 50)
 
+
 if __name__ == "__main__":
+    test_encode_iterable()
     main()

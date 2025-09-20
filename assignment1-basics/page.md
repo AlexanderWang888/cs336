@@ -13,6 +13,15 @@ s = "\x00"
 print(repr(s))  # 输出：'\x00'
 print(s)  # 输出：（控制台无任何可见内容，仅换行）
 
+(c)
+>>> chr(0) 
+\x00
+>>> print(chr(0)) 
+
+>>> "this is a test" + chr(0) + "string"
+this is a test\x00string
+>>> print("this is a test" + chr(0) + "string")
+this is a teststring
 
 2.
 (a)
@@ -35,4 +44,36 @@ b3 = "你好".encode("utf-8")  # 字符串编码为 bytes（UTF-8 中每个中�
 (c)
 b'\xff\xfe'
 
-2.3
+2.5问题（train_bpe_tinystories）：在 TinyStories 上训练 BPE（2 分）
+(a)
+[训练完成] 内存使用 - 常驻内存: 96.72 MB, 虚拟内存: 317.21 MB
+用时95s
+
+最长的vocab key信息:
+key: 7160
+key长度（元素数量）: 15
+对应的value（字节）: b' accomplishment'
+value解码为字符串:  accomplishment
+
+
+2.5问题（train_bpe_expts_owt）：在 OpenWebText 上训练 BPE（2 分）
+######
+未做
+
+4.2问题：学习率是对训练影响最大的超参数之一。通过以下玩具示例验证这一点：运行上述 SGD 示例，将学习率分别改为 1e1、1e2、1e3，仅训练 10 个迭代步骤。观察不同学习率下损失的变化：是衰减更快、更慢，还是发散（即训练过程中损失增大）？
+A: 1e2最快，然后1e1， 1e3不能成功（发散）
+
+2.5节
+2.7
+3.6
+4.3
+
+Adamw
+学习率调度
+rope
+
+
+
+
+
+

@@ -9,7 +9,11 @@ import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from cs336_basics.bpe import train_bpe
-
+from cs336_basics.tokenizer import Tokenizer
+from cs336_basics.transformer import *
+# from cs336_basics.train import *
+from cs336_basics.optimizer import *
+from cs336_basics.utils import *
 
 def run_linear(
     d_in: int,
@@ -29,8 +33,9 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
+    model = Linear(d_in, d_out)
+    model.load_state_dict({'w': weights})
+    return model(in_features)
 
 
 def run_embedding(
@@ -52,7 +57,9 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
 
-    raise NotImplementedError
+    model = Embedding(vocab_size, d_model)
+    model.load_state_dict({'table': weights})
+    return model(token_ids)
 
 
 def run_swiglu(
@@ -84,7 +91,9 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    model = SwiGLU(d_model, d_ff)
+    model.load_state_dict({'w1': w1_weight, 'w2': w2_weight, 'w3': w3_weight})
+    return model(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -105,7 +114,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -139,7 +148,12 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    model = Multihead_Self_Attention(d_model, num_heads, in_features.shape[-2])
+    model.q_proj.data = q_proj_weight
+    model.k_proj.data = k_proj_weight
+    model.v_proj.data = v_proj_weight
+    model.o_proj.data = o_proj_weight
+    return model(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -179,7 +193,12 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    model = Multihead_Self_Attention(d_model, num_heads, max_seq_len, theta)
+    model.q_proj.data = q_proj_weight
+    model.k_proj.data = k_proj_weight
+    model.v_proj.data = v_proj_weight
+    model.o_proj.data = o_proj_weight
+    return model(in_features, token_positions)
 
 
 def run_rope(
@@ -201,7 +220,8 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    model = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    return model(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
@@ -274,8 +294,39 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
-
+    transformer_block = TransformerBlock(d_model,num_heads,d_ff,max_seq_len,theta)
+    weight_mapping = {
+        "attn.q_proj.weight": transformer_block.mla.q_proj,
+        "attn.k_proj.weight": transformer_block.mla.k_proj,
+        "attn.v_proj.weight": transformer_block.mla.v_proj,
+        "attn.output_proj.weight": transformer_block.mla.o_proj,
+        "ln1.weight": transformer_block.norm1.g,
+        "ffn.w1.weight": transformer_block.ffn.w1,
+        "ffn.w2.weight": transformer_block.ffn.w2,
+        "ffn.w3.weight": transformer_block.ffn.w3,
+        "ln2.weight": transformer_block.norm2.g,
+    }
+    
+    # 2. 遍历映射关系，逐个加载权重
+    for weight_key, model_param in weight_mapping.items():
+        # 检查权重字典是否包含当前键
+        if weight_key not in weights:
+            raise KeyError(f"权重字典缺少必要的键: {weight_key}")
+        
+        # 获取预权重张量
+        pretrained_weight = weights[weight_key]
+        
+        # 可选：校验形状是否匹配（避免维度错误）
+        if pretrained_weight.shape != model_param.shape:
+            raise ValueError(
+                f"权重形状不匹配！键: {weight_key}\n"
+                f"预权重形状: {pretrained_weight.shape}, 模型参数形状: {model_param.shape}"
+            )
+        
+        # 3. 加载权重（设备对齐 + 数据拷贝）
+        # 使用 .data.copy_() 保持 requires_grad 属性不变，且支持跨设备拷贝
+        model_param.data.copy_(pretrained_weight.to(model_param.device))
+    return transformer_block(in_features)
 
 def run_transformer_lm(
     vocab_size: int,
@@ -288,75 +339,88 @@ def run_transformer_lm(
     weights: dict[str, Tensor],
     in_indices: Int[Tensor, " batch_size sequence_length"],
 ) -> Float[Tensor, " batch_size sequence_length vocab_size"]:
-    """Given the weights of a Transformer language model and input indices,
-    return the output of running a forward pass on the input indices.
-
-    This function should use RoPE.
-
-    Args:
-        vocab_size (int): The number of unique items in the output vocabulary to be predicted.
-        context_length (int): The maximum number of tokens to process at once.
-        d_model (int): The dimensionality of the model embeddings and sublayer outputs.
-        num_layers (int): The number of Transformer layers to use.
-        num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
-            evenly divisible by `num_heads`.
-        d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
-        weights (dict[str, Tensor]):
-            State dict of our reference implementation. {num_layers} refers to an
-            integer between `0` and `num_layers - 1` (the layer index).
-            The keys of this dictionary are:
-            - `token_embeddings.weight`
-                Token embedding matrix. Shape is (vocab_size, d_model).
-            - `layers.{num_layers}.attn.q_proj.weight`
-                The query projections for all `num_heads` attention heads.
-                Shape is (num_heads * (d_model / num_heads), d_model).
-                The rows are ordered by matrices of shape (num_heads, d_k),
-                so `attn.q_proj.weight == torch.cat([q_heads.0.weight, ..., q_heads.N.weight], dim=0)`.
-            - `layers.{num_layers}.attn.k_proj.weight`
-                The key projections for all `num_heads` attention heads.
-                Shape is (num_heads * (d_model / num_heads), d_model).
-                The rows are ordered by matrices of shape (num_heads, d_k),
-                so `attn.k_proj.weight == torch.cat([k_heads.0.weight, ..., k_heads.N.weight], dim=0)`.
-            - `layers.{num_layers}.attn.v_proj.weight`
-                The value projections for all `num_heads` attention heads.
-                Shape is (num_heads * (d_model / num_heads), d_model).
-                The rows are ordered by matrices of shape (num_heads, d_v),
-                so `attn.v_proj.weight == torch.cat([v_heads.0.weight, ..., v_heads.N.weight], dim=0)`.
-            - `layers.{num_layers}.attn.output_proj.weight`
-                Weight of the multi-head self-attention output projection
-                Shape is ((d_model / num_heads) * num_heads, d_model).
-            - `layers.{num_layers}.ln1.weight`
-                Weights of affine transform for the first RMSNorm
-                applied in the transformer block.
-                Shape is (d_model,).
-            - `layers.{num_layers}.ffn.w1.weight`
-                Weight of the first linear transformation in the FFN.
-                Shape is (d_model, d_ff).
-            - `layers.{num_layers}.ffn.w2.weight`
-                Weight of the second linear transformation in the FFN.
-                Shape is (d_ff, d_model).
-            - `layers.{num_layers}.ffn.w3.weight`
-                Weight of the third linear transformation in the FFN.
-                Shape is (d_model, d_ff).
-            - `layers.{num_layers}.ln2.weight`
-                Weights of affine transform for the second RMSNorm
-                applied in the transformer block.
-                Shape is (d_model,).
-            - `ln_final.weight`
-                Weights of affine transform for RMSNorm applied to the output of the final transformer block.
-                Shape is (d_model, ).
-            - `lm_head.weight`
-                Weights of the language model output embedding.
-                Shape is (vocab_size, d_model).
-        in_indices (Int[Tensor, "batch_size sequence_length"]) Tensor with input indices to run the language model on. Shape is (batch_size, sequence_length), where
-            `sequence_length` is at most `context_length`.
-
-    Returns:
-        Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
-        next-word distribution for each token.
     """
-    raise NotImplementedError
+    带权重替换的Transformer LM前向推理（修复叶子变量原地操作错误）
+    """
+    # 1. 确定设备和数据类型
+    device = in_indices.device
+    dtype = next(iter(weights.values())).dtype
+
+    # 2. 创建Transformer实例
+    transformer = Transformer(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        rope_theta=rope_theta,
+        device=device,
+        dtype=dtype
+    )
+
+    # 3. 权重替换：使用非原地操作避免错误
+    # 3.1 替换嵌入层权重
+    token_emb_weight = weights["token_embeddings.weight"].to(device)
+    assert transformer.embedding.table.shape == token_emb_weight.shape, \
+        f"嵌入层权重维度不匹配：模型需{transformer.embedding.table.shape}，输入为{token_emb_weight.shape}"
+    # 关键修改：使用非原地赋值替代copy_()
+    transformer.embedding.table = nn.Parameter(token_emb_weight)
+
+    # 3.2 按层替换权重
+    for layer_idx in range(num_layers):
+        current_block = transformer.transformer_blocks[layer_idx]
+        current_attn = current_block.mla
+        current_ffn = current_block.ffn
+        current_ln1 = current_block.norm1
+        current_ln2 = current_block.norm2
+
+        # 注意力层权重（关键修改：使用nn.Parameter重新赋值）
+        q_proj_key = f"layers.{layer_idx}.attn.q_proj.weight"
+        k_proj_key = f"layers.{layer_idx}.attn.k_proj.weight"
+        v_proj_key = f"layers.{layer_idx}.attn.v_proj.weight"
+        o_proj_key = f"layers.{layer_idx}.attn.output_proj.weight"
+        
+        current_attn.q_proj = nn.Parameter(weights[q_proj_key].to(device))
+        current_attn.k_proj = nn.Parameter(weights[k_proj_key].to(device))
+        current_attn.v_proj = nn.Parameter(weights[v_proj_key].to(device))
+        current_attn.o_proj = nn.Parameter(weights[o_proj_key].to(device))
+
+        # FFN层权重
+        ffn_w1_key = f"layers.{layer_idx}.ffn.w1.weight"
+        ffn_w2_key = f"layers.{layer_idx}.ffn.w2.weight"
+        ffn_w3_key = f"layers.{layer_idx}.ffn.w3.weight"
+        
+        current_ffn.w1 = nn.Parameter(weights[ffn_w1_key].to(device))
+        current_ffn.w2 = nn.Parameter(weights[ffn_w2_key].to(device))
+        current_ffn.w3 = nn.Parameter(weights[ffn_w3_key].to(device))
+
+        # 归一化层权重
+        ln1_key = f"layers.{layer_idx}.ln1.weight"
+        ln2_key = f"layers.{layer_idx}.ln2.weight"
+        
+        current_ln1.g = nn.Parameter(weights[ln1_key].to(device))
+        current_ln2.g = nn.Parameter(weights[ln2_key].to(device))
+
+    # 3.3 替换最终归一化层和LM Head权重
+    ln_final_weight = weights["ln_final.weight"].to(device)
+    assert transformer.norm.g.shape == ln_final_weight.shape, \
+        f"最终归一化层权重维度不匹配：模型需{transformer.norm.g.shape}，输入为{ln_final_weight.shape}"
+    transformer.norm.g = nn.Parameter(ln_final_weight)
+
+    lm_head_weight = weights["lm_head.weight"].to(device)
+    assert transformer.lin.w.shape == lm_head_weight.shape, \
+        f"LM Head权重维度不匹配：模型需{transformer.lin.w.shape}，输入为{lm_head_weight.shape}"
+    transformer.lin.w = nn.Parameter(lm_head_weight)
+
+    # 4. 切换为推理模式
+    transformer.eval()
+
+    # 5. 前向传播
+    output = transformer(in_indices)
+
+    return output
+
 
 
 def run_rmsnorm(
@@ -379,7 +443,9 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    model = RMSNorm(d_model, eps)
+    model.load_state_dict({'g': weights})
+    return model(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
@@ -416,7 +482,7 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return get_batch(dataset, batch_size, context_length, device)
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -432,7 +498,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    return softmax(in_features, dim)
 
 
 def run_cross_entropy(
@@ -450,7 +516,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -462,14 +528,14 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -497,7 +563,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return learning_rate_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(
@@ -516,7 +582,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -537,7 +603,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    return load_checkpoint(src, model, optimizer)
 
 
 def get_tokenizer(
@@ -560,7 +626,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    return Tokenizer(vocab, merges, special_tokens)
 
 
 def run_train_bpe(
